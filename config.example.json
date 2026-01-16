@@ -1,0 +1,15 @@
+[
+  {
+    "name": "Account A",
+    "domain": "https://example.com",
+    "api_user": "your-api-user-value",
+    "cookies": "session=xxx"
+  },
+  {
+    "name": "Account B",
+    "domain": "https://another-site.com",
+    "api_user": "another-api-user",
+    "cookies": "session=aaa",
+    "endpoint": "/api/user/sign_in"
+  }
+]
