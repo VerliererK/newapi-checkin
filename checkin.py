@@ -3,6 +3,7 @@ import json
 import asyncio
 import logging
 import argparse
+from utils.exceptions import HTTPError
 
 from playwright.async_api import async_playwright
 
@@ -54,22 +55,20 @@ async def get_quota(page, domain, api_user):
     await page.set_extra_http_headers({"new-api-user": api_user})
     response = await page.goto(url)
     await page.wait_for_load_state("networkidle")
+    text = await response.text() if response else ""
 
+    if not response:
+        raise HTTPError("[/api/user/self] No response", status_code=0)
     if not response.ok:
-        text = await response.text()
-        logging.error(f"Request failed: {response.status} - {text[:100]}")
-        return None
+        raise HTTPError(f"[/api/user/self] HTTP {response.status}: {text[:100]}", status_code=response.status)
 
-    text = await response.text()
     try:
         data = json.loads(text)
-    except json.JSONDecodeError:
-        logging.error("Failed to parse JSON response")
-        return None
+    except json.JSONDecodeError as e:
+        raise HTTPError(f"[/api/user/self] Invalid JSON response: {e}", status_code=response.status)
 
     if not data.get("success"):
-        logging.error(f"Failed to get user info: {data.get('message')}")
-        return None
+        raise HTTPError(f"[/api/user/self] Failed to get user info: {data}", status_code=response.status)
 
     user_data = data.get("data", {})
     quota = round(user_data.get("quota", 0) / QUOTA_DIVISOR, 2)
@@ -112,14 +111,13 @@ async def process_account(browser, account):
         await page.goto(domain)
         await page.wait_for_load_state("networkidle")
 
-        quota = await get_quota(page, domain, api_user)
-        if quota is None:
-            return
-
+        await get_quota(page, domain, api_user)
         await checkin(page, domain, api_user, endpoint)
         await get_quota(page, domain, api_user)
+    except HTTPError as e:
+        logging.error(f"[{name}] HTTP error: {e}")
     except Exception as e:
-        logging.error(f"[{account.get('name', 'Unknown')}] Execution error: {e}")
+        logging.error(f"[{name}] Execution error: {e}")
     finally:
         await context.close()
 
