@@ -5,7 +5,7 @@
 ## 安裝
 
 ```bash
-pip install playwright
+pip install playwright requests
 playwright install
 ```
 
@@ -18,15 +18,18 @@ playwright install
 ### 設定格式
 
 ```json
-[
-  {
-    "name": "帳號 A",
-    "domain": "https://example.com",
-    "api_user": "your-api-user-value",
-    "cookies": "session=xxx",
-    "endpoint": "/api/user/sign_in"
-  }
-]
+{
+  "accounts": [
+    {
+      "name": "帳號 A",
+      "domain": "https://example.com",
+      "api_user": "your-api-user-value",
+      "cookies": "session=xxx",
+      "endpoint": "/api/user/sign_in"
+    }
+  ],
+  "notifications": []
+}
 ```
 
 | 欄位 | 必填 | 說明 |
@@ -36,6 +39,50 @@ playwright install
 | `api_user` | 是 | `new-api-user` 標頭值 |
 | `cookies` | 是 | Cookie 字串或物件 |
 | `endpoint` | 否 | 簽到端點，預設 `/api/user/sign_in` |
+
+## 通知
+
+目前支援以下通知方式，請在設定檔的 `notifications` 列表中設定：
+
+### ntfy
+
+```json
+{
+  "type": "ntfy",
+  "url": "https://ntfy.sh/your-topic"
+}
+```
+
+當簽到成功且餘額增加，或發生錯誤時，會發送通知。
+
+### 擴充通知方式
+
+若要支援新的通知管道（例如 Telegram、Discord），請依照以下步驟：
+
+1.  在 `utils/notify.py` 中建立新的類別，繼承 `Notifier`：
+
+    ```python
+    class MyNotifier(Notifier):
+        def __init__(self, token):
+            self.token = token
+
+        def send(self, title: str, message: str):
+            # Implement sending logic here
+            pass
+    ```
+
+2.  修改 `utils/notify.py` 中的 `create_notifiers` 函式，加入新的類型判斷：
+
+    ```python
+    def create_notifiers(config_list):
+        notifiers = []
+        for cfg in config_list:
+            if cfg.get("type") == "ntfy":
+                notifiers.append(NtfyNotifier(cfg.get("url")))
+            elif cfg.get("type") == "my_notify":
+                notifiers.append(MyNotifier(cfg.get("token")))
+        return notifiers
+    ```
 
 ## 執行
 

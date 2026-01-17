@@ -4,6 +4,7 @@ import asyncio
 import logging
 import argparse
 from utils.exceptions import HTTPError
+from utils.notify import create_notifiers, send_notifications
 
 from playwright.async_api import async_playwright
 
@@ -94,7 +95,7 @@ async def create_context(browser, domain, cookies):
     return context, page
 
 
-async def process_account(browser, account):
+async def process_account(browser, account, notifiers):
     name = account.get("name", "Unknown")
     domain = account.get("domain", "")
     endpoint = account.get("endpoint", DEFAULT_ENDPOINT)
@@ -111,13 +112,23 @@ async def process_account(browser, account):
         await page.goto(domain)
         await page.wait_for_load_state("networkidle")
 
-        await get_quota(page, domain, api_user)
+        old_quota = await get_quota(page, domain, api_user)
         await checkin(page, domain, api_user, endpoint)
-        await get_quota(page, domain, api_user)
+        new_quota = await get_quota(page, domain, api_user)
+
+        if new_quota > old_quota:
+            msg = f"[{name}] Checkin success, Quota: {old_quota} -> {new_quota}"
+            logging.info(msg)
+            send_notifications(notifiers, f"!! NewAPI Checkin Success !!", msg)
+
     except HTTPError as e:
-        logging.error(f"[{name}] HTTP error: {e}")
+        err_msg = f"[{name}] HTTP error: {e}"
+        logging.error(err_msg)
+        send_notifications(notifiers, f"!! NewAPI Checkin Error !!", err_msg)
     except Exception as e:
-        logging.error(f"[{name}] Execution error: {e}")
+        err_msg = f"[{name}] Execution error: {e}"
+        logging.error(err_msg)
+        send_notifications(notifiers, f"!! NewAPI Checkin Error !!", err_msg)
     finally:
         await context.close()
 
@@ -131,8 +142,10 @@ async def main():
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True, channel=args.channel)
         try:
-            for account in config:
-                await process_account(browser, account)
+            accounts = config.get("accounts", [])
+            notifiers = create_notifiers(config.get("notifications", []))
+            for account in accounts:
+                await process_account(browser, account, notifiers)
         except Exception as e:
             logging.error(f"Execution error: {e}")
         finally:
