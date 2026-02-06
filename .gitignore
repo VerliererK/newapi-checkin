@@ -14,3 +14,6 @@ env.bak/
 venv.bak/
 
 config*.json
+!config.example.json
+linuxdo_state.json
+cookies_cache.json

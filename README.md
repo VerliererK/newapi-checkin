@@ -1,6 +1,6 @@
 # NewAPI 自動簽到
 
-使用 Playwright 自動執行 NewAPI 服務的每日簽到，支援 GitHub Actions 排程執行。
+使用 Playwright 自動執行 NewAPI 服務的每日簽到，透過 LinuxDo OAuth 自動取得 cookies，支援 GitHub Actions 排程執行。
 
 ## 安裝
 
@@ -19,12 +19,15 @@ playwright install
 
 ```json
 {
+  "linuxdo": {
+    "email": "user@example.com",
+    "password": "password123"
+  },
   "accounts": [
     {
       "name": "帳號 A",
       "domain": "https://example.com",
-      "api_user": "your-api-user-value",
-      "cookies": "session=xxx",
+      "client_id": "linuxdo-oauth-id",
       "endpoint": "/api/user/sign_in"
     }
   ],
@@ -32,13 +35,23 @@ playwright install
 }
 ```
 
+#### LinuxDo 登入
+
+| 欄位 | 必填 | 說明 |
+|------|------|------|
+| `email` | 是 | LinuxDo 登入信箱 |
+| `password` | 是 | LinuxDo 登入密碼 |
+
+#### 帳號設定
+
 | 欄位 | 必填 | 說明 |
 |------|------|------|
 | `name` | 否 | 帳號名稱，用於日誌識別 |
 | `domain` | 是 | API 網址 |
-| `api_user` | 是 | `new-api-user` 標頭值 |
-| `cookies` | 是 | Cookie 字串或物件 |
+| `client_id` | 是 | LinuxDo OAuth client ID |
 | `endpoint` | 否 | 簽到端點，預設 `/api/user/sign_in` |
+
+`api_user` 和 `cookies` 會透過 OAuth 自動取得，並快取至 `cookies_cache.json`。
 
 ## 通知
 
@@ -99,3 +112,5 @@ python checkin.py --channel msedge
 ## GitHub Actions
 
 在 Repository 設定 `CHECKIN_CONFIG` Secret，填入 JSON 設定字串即可。
+
+Workflow 會自動快取 `linuxdo_state.json` 和 `cookies_cache.json`，在每次執行間保留 LinuxDo 登入狀態及 OAuth cookies。
