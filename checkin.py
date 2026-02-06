@@ -11,7 +11,6 @@ from playwright.async_api import async_playwright
 
 logging.basicConfig(format='%(asctime)s [%(levelname)s] %(message)s', level=logging.INFO)
 
-CONFIG_ENV = 'CHECKIN_CONFIG'
 CONFIG_FILE = 'config.json'
 COOKIES_CACHE = 'cookies_cache.json'
 QUOTA_DIVISOR = 500000
@@ -20,18 +19,32 @@ USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTM
 
 
 def load_config():
-    """Load config from environment variable or config.json"""
-    env_config = os.environ.get(CONFIG_ENV)
-    if env_config:
-        logging.info('Loading config from environment variable')
-        return json.loads(env_config)
+    """Load config from environment variables or config.json"""
+    linuxdo_email = os.environ.get('LINUXDO_EMAIL')
+    linuxdo_password = os.environ.get('LINUXDO_PASSWORD')
+    accounts_env = os.environ.get('CHECKIN_ACCOUNTS')
+    notify_env = os.environ.get('CHECKIN_NOTIFY')
 
-    if os.path.exists(CONFIG_FILE):
+    if accounts_env:
+        logging.info('Loading config from environment variables')
+        config = {
+            'accounts': json.loads(accounts_env),
+            'notifications': json.loads(notify_env) if notify_env else [],
+        }
+    elif os.path.exists(CONFIG_FILE):
         logging.info('Loading config from config.json')
         with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
-            return json.load(f)
+            config = json.load(f)
+    else:
+        raise RuntimeError('No config found. Set CHECKIN_ACCOUNTS env or create config.json')
 
-    raise RuntimeError('No config found. Set CHECKIN_CONFIG env or create config.json')
+    # LinuxDo credentials always from environment variables
+    if linuxdo_email and linuxdo_password:
+        config['linuxdo'] = {'email': linuxdo_email, 'password': linuxdo_password}
+    else:
+        config.pop('linuxdo', None)
+
+    return config
 
 
 def load_cookies_cache():

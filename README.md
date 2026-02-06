@@ -12,17 +12,15 @@ playwright install
 ## 設定
 
 設定檔依以下優先順序載入：
-1. `CHECKIN_CONFIG` 環境變數（用於 GitHub Actions）
+1. 環境變數（用於 GitHub Actions）
 2. `config.json` 檔案（用於本機開發）
 
 ### 設定格式
 
+`config.json`（或 `CHECKIN_ACCOUNTS` 環境變數）只包含帳號和通知設定：
+
 ```json
 {
-  "linuxdo": {
-    "email": "user@example.com",
-    "password": "password123"
-  },
   "accounts": [
     {
       "name": "帳號 A",
@@ -35,14 +33,23 @@ playwright install
 }
 ```
 
-#### LinuxDo 登入
+### LinuxDo 登入
 
-| 欄位 | 必填 | 說明 |
-|------|------|------|
-| `email` | 是 | LinuxDo 登入信箱 |
-| `password` | 是 | LinuxDo 登入密碼 |
+LinuxDo 帳密一律透過環境變數設定，不寫入設定檔：
 
-#### 帳號設定
+| 環境變數 | 必填 | 說明 |
+|----------|------|------|
+| `LINUXDO_EMAIL` | 是 | LinuxDo 登入信箱 |
+| `LINUXDO_PASSWORD` | 是 | LinuxDo 登入密碼 |
+
+本機開發時可在終端設定：
+
+```bash
+export LINUXDO_EMAIL="user@example.com"
+export LINUXDO_PASSWORD="password123"
+```
+
+### 帳號設定
 
 | 欄位 | 必填 | 說明 |
 |------|------|------|
@@ -111,6 +118,44 @@ python checkin.py --channel msedge
 
 ## GitHub Actions
 
-在 Repository 設定 `CHECKIN_CONFIG` Secret，填入 JSON 設定字串即可。
+在 Repository 設定以下 Secrets 和 Variables：
+
+### Secrets（敏感資料）
+
+| 名稱 | 說明 |
+|------|------|
+| `LINUXDO_EMAIL` | LinuxDo 登入信箱 |
+| `LINUXDO_PASSWORD` | LinuxDo 登入密碼 |
+
+### Variables（一般設定，可隨時查看修改）
+
+| 名稱 | 必填 | 說明 |
+|------|------|------|
+| `CHECKIN_ACCOUNTS` | 是 | accounts JSON 陣列 |
+| `CHECKIN_NOTIFY` | 否 | notifications JSON 陣列 |
+
+`CHECKIN_ACCOUNTS` 範例：
+
+```json
+[
+  {
+    "name": "帳號 A",
+    "domain": "https://example.com",
+    "client_id": "linuxdo-oauth-id",
+    "endpoint": "/api/user/sign_in"
+  }
+]
+```
+
+`CHECKIN_NOTIFY` 範例：
+
+```json
+[
+  {
+    "type": "ntfy",
+    "url": "https://ntfy.sh/your-topic"
+  }
+]
+```
 
 Workflow 會自動快取 `linuxdo_state.json` 和 `cookies_cache.json`，在每次執行間保留 LinuxDo 登入狀態及 OAuth cookies。

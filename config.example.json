@@ -1,8 +1,4 @@
 {
-  "linuxdo": {
-    "email": "user@example.com",
-    "password": "password123"
-  },
   "accounts": [
     {
       "name": "Account A",

@@ -50,5 +50,8 @@ jobs:
 
       - name: Run checkin
         env:
-          CHECKIN_CONFIG: ${{ secrets.CHECKIN_CONFIG }}
+          LINUXDO_EMAIL: ${{ secrets.LINUXDO_EMAIL }}
+          LINUXDO_PASSWORD: ${{ secrets.LINUXDO_PASSWORD }}
+          CHECKIN_ACCOUNTS: ${{ vars.CHECKIN_ACCOUNTS }}
+          CHECKIN_NOTIFY: ${{ vars.CHECKIN_NOTIFY }}
         run: python checkin.py
