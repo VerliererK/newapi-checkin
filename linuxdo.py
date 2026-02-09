@@ -116,7 +116,10 @@ async def oauth_authorize(context, page, account):
     state_url = f'{domain}/api/oauth/state'
     logging.info(f'[{name}] Fetching OAuth state...')
     api_response = await context.request.get(state_url)
-    state_data = json.loads(await api_response.text())
+    try:
+        state_data = json.loads(await api_response.text())
+    except json.JSONDecodeError:
+        state_data = {}
     state = state_data.get('data', '')
 
     if not state:
