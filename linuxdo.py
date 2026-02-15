@@ -33,6 +33,53 @@ async def _is_logged_in(page):
         return False
 
 
+def _parse_oauth_state(body):
+    """Extract OAuth state from API JSON response body."""
+    try:
+        state_data = json.loads(body)
+    except json.JSONDecodeError:
+        return ''
+
+    state = state_data.get('data', '')
+    return state if isinstance(state, str) else ''
+
+
+async def _fetch_oauth_state(page, name, domain):
+    logging.info(f'[{name}] Fetching OAuth state...')
+
+    state_url = f'{domain}/api/oauth/state'
+    try:
+        result = await page.evaluate(
+            """async (url) => {
+                const res = await fetch(url, {
+                    method: 'GET',
+                    credentials: 'include',
+                    headers: {
+                        'accept': 'application/json, text/plain, */*'
+                    }
+                });
+                return {
+                    ok: res.ok,
+                    status: res.status,
+                    text: await res.text()
+                };
+            }""",
+            state_url,
+        )
+    except Exception as e:
+        logging.warning(f'[{name}] Fetch OAuth state failed in page: {e}')
+        result = {'ok': False, 'status': 0, 'text': ''}
+
+    body = result.get('text', '') or ''
+    state = _parse_oauth_state(body)
+    if state:
+        return state
+
+    status = result.get('status')
+    logging.error(f'[{name}] Empty OAuth state (status={status}), body: {body}')
+    return ''
+
+
 async def login_linuxdo(browser, username, password, notifiers=None):
     domain = 'https://linux.do/login'
 
@@ -112,15 +159,8 @@ async def oauth_authorize(context, page, account):
     except:
         pass
 
-    # Fetch OAuth state via API
-    state_url = f'{domain}/api/oauth/state'
-    logging.info(f'[{name}] Fetching OAuth state...')
-    api_response = await context.request.get(state_url)
-    try:
-        state_data = json.loads(await api_response.text())
-    except json.JSONDecodeError:
-        state_data = {}
-    state = state_data.get('data', '')
+    # Fetch OAuth state via in-page fetch (handles Cloudflare better than direct API requests)
+    state = await _fetch_oauth_state(page, name, domain)
 
     if not state:
         logging.error(f'[{name}] Empty OAuth state')
