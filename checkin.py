@@ -159,13 +159,25 @@ async def process_account(browser, linuxdo_context, account, notifiers, cookies_
         page = await linuxdo_context.new_page()
         await page.add_init_script("Object.defineProperty(navigator, 'webdriver', { get: () => undefined });")
         try:
-            api_user, cookies_dict = await oauth_authorize(linuxdo_context, page, account)
+            api_user, cookies_dict = None, None
+            max_retries = 3
+            for attempt in range(1, max_retries + 1):
+                try:
+                    api_user, cookies_dict = await oauth_authorize(linuxdo_context, page, account)
+                    if api_user and cookies_dict:
+                        break
+                    logging.warning(f'[{name}] OAuth returned empty cookies (attempt {attempt}/{max_retries})')
+                except Exception as e:
+                    logging.warning(f'[{name}] OAuth attempt {attempt}/{max_retries} failed: {e}')
+                if attempt < max_retries:
+                    await asyncio.sleep(3)
+
             if api_user and cookies_dict:
                 update_cookies_cache(cookies_cache, domain, api_user, cookies_dict)
                 logging.info(f'[{name}] OAuth cookies obtained and cached')
                 await _run_checkin(page, name, domain, api_user, endpoint, notifiers)
             else:
-                logging.error(f'[{name}] OAuth returned empty cookies')
+                logging.error(f'[{name}] OAuth failed after {max_retries} attempts')
         finally:
             await page.close()
 
