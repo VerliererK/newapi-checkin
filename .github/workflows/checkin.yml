@@ -50,8 +50,7 @@ jobs:
 
       - name: Run checkin
         env:
-          LINUXDO_EMAIL: ${{ secrets.LINUXDO_EMAIL }}
-          LINUXDO_PASSWORD: ${{ secrets.LINUXDO_PASSWORD }}
+          LINUXDO_COOKIE: ${{ secrets.LINUXDO_COOKIE }}
           CHECKIN_ACCOUNTS: ${{ vars.CHECKIN_ACCOUNTS }}
           CHECKIN_NOTIFY: ${{ vars.CHECKIN_NOTIFY }}
         run: python checkin.py

@@ -1,9 +1,6 @@
-import asyncio
 import os
 import json
 import logging
-
-from utils.notify import send_notifications
 
 logging.basicConfig(format='%(asctime)s [%(levelname)s] %(message)s', level=logging.INFO)
 
@@ -19,6 +16,34 @@ async def _create_context_with_state(browser):
         ignore_https_errors=True,
         storage_state=STATE_FILE,
     )
+    page = await context.new_page()
+    await page.add_init_script("Object.defineProperty(navigator, 'webdriver', { get: () => undefined });")
+    return context, page
+
+
+async def _create_context_with_cookies(browser, cookie_string):
+    """Create a browser context with manually provided LinuxDo cookies."""
+    context = await browser.new_context(
+        user_agent=USER_AGENT,
+        viewport={'width': 800, 'height': 600},
+        ignore_https_errors=True,
+    )
+
+    cookies = []
+    for part in cookie_string.split(';'):
+        part = part.strip()
+        if '=' in part:
+            name, value = part.split('=', 1)
+            cookies.append({
+                'name': name.strip(),
+                'value': value.strip(),
+                'domain': '.linux.do',
+                'path': '/',
+            })
+
+    if cookies:
+        await context.add_cookies(cookies)
+
     page = await context.new_page()
     await page.add_init_script("Object.defineProperty(navigator, 'webdriver', { get: () => undefined });")
     return context, page
@@ -80,9 +105,8 @@ async def _fetch_oauth_state(page, name, domain):
     return ''
 
 
-async def login_linuxdo(browser, username, password, notifiers=None):
-    domain = 'https://linux.do/login'
-
+async def login_linuxdo(browser):
+    # Priority 1: Try saved state file
     if os.path.exists(STATE_FILE):
         logging.info('[linuxDo] Found saved state, attempting to restore session...')
         try:
@@ -91,53 +115,29 @@ async def login_linuxdo(browser, username, password, notifiers=None):
                 logging.info('[linuxDo] Session restored from saved state')
                 return context
             else:
-                logging.info('[linuxDo] Saved state expired, will login again')
+                logging.info('[linuxDo] Saved state expired')
                 await context.close()
         except Exception as e:
             logging.warning(f'[linuxDo] Failed to restore state: {e}')
 
-    context = await browser.new_context(
-        user_agent=USER_AGENT,
-        viewport={'width': 800, 'height': 600},
-        ignore_https_errors=True,
-    )
-    page = await context.new_page()
-    await page.add_init_script("Object.defineProperty(navigator, 'webdriver', { get: () => undefined });")
-
-    try:
-        logging.info(f'[linuxDo] Accessing: {domain}')
-        await page.goto(domain)
+    # Priority 2: Try LINUXDO_COOKIE env var
+    cookie_str = os.environ.get('LINUXDO_COOKIE')
+    if cookie_str:
+        logging.info('[linuxDo] Trying cookies from LINUXDO_COOKIE env var...')
         try:
-            await page.wait_for_load_state('networkidle', timeout=5000)
-        except:
-            pass
+            context, page = await _create_context_with_cookies(browser, cookie_str)
+            if await _is_logged_in(page):
+                logging.info('[linuxDo] Cookie login success')
+                await context.storage_state(path=STATE_FILE)
+                return context
+            else:
+                logging.warning('[linuxDo] Cookies from env var are invalid/expired')
+                await context.close()
+        except Exception as e:
+            logging.warning(f'[linuxDo] Failed to use LINUXDO_COOKIE: {e}')
 
-        if domain != page.url:
-            logging.info('[linuxDo] Already logged in')
-            await context.storage_state(path=STATE_FILE)
-            return context
-
-        logging.info('[linuxDo] Attempting login...')
-        await page.wait_for_selector('#login-account-name')
-        await page.fill('#login-account-name', username)
-        await page.fill('#login-account-password', password)
-        await page.click('#login-button')
-        await page.wait_for_selector('#current-user', timeout=20000)
-
-        msg = '[linuxDo] Login success'
-        logging.info(msg)
-        send_notifications(notifiers, '!! LinuxDo Login Success !!', msg)
-
-        await asyncio.sleep(2)
-        await context.storage_state(path=STATE_FILE)
-        logging.info(f'[linuxDo] State saved to {STATE_FILE}')
-
-    except Exception as e:
-        err_msg = f'[linuxDo] Login failed: {e}'
-        logging.error(err_msg)
-        send_notifications(notifiers, '!! LinuxDo Login Error !!', err_msg)
-
-    return context
+    logging.error('[linuxDo] No valid session available')
+    return None
 
 
 async def oauth_authorize(context, page, account):

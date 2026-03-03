@@ -20,8 +20,6 @@ USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTM
 
 def load_config():
     """Load config from environment variables or config.json"""
-    linuxdo_email = os.environ.get('LINUXDO_EMAIL')
-    linuxdo_password = os.environ.get('LINUXDO_PASSWORD')
     accounts_env = os.environ.get('CHECKIN_ACCOUNTS')
     notify_env = os.environ.get('CHECKIN_NOTIFY')
 
@@ -37,12 +35,6 @@ def load_config():
             config = json.load(f)
     else:
         raise RuntimeError('No config found. Set CHECKIN_ACCOUNTS env or create config.json')
-
-    # LinuxDo credentials always from environment variables
-    if linuxdo_email and linuxdo_password:
-        config['linuxdo'] = {'email': linuxdo_email, 'password': linuxdo_password}
-    else:
-        config.pop('linuxdo', None)
 
     return config
 
@@ -212,7 +204,6 @@ async def main():
 
     notifiers = create_notifiers(config.get('notifications', []))
     cookies_cache = load_cookies_cache()
-    linuxdo_config = config.get('linuxdo', {})
     accounts = config.get('accounts', [])
 
     async with async_playwright() as p:
@@ -220,17 +211,10 @@ async def main():
         linuxdo_context = None
 
         try:
-            # Login to LinuxDo if config provided
-            if linuxdo_config.get('email') and linuxdo_config.get('password'):
-                try:
-                    linuxdo_context = await login_linuxdo(
-                        browser,
-                        linuxdo_config['email'],
-                        linuxdo_config['password'],
-                        notifiers,
-                    )
-                except Exception as e:
-                    logging.error(f'LinuxDo login failed: {e}, will use cached cookies')
+            # Login to LinuxDo (tries: saved state → LINUXDO_COOKIE)
+            linuxdo_context = await login_linuxdo(browser)
+            if not linuxdo_context:
+                logging.warning('LinuxDo login unavailable, will use cached cookies only')
 
             # Process each account
             for account in accounts:
