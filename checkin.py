@@ -214,7 +214,9 @@ async def main():
             # Login to LinuxDo (tries: saved state → LINUXDO_COOKIE)
             linuxdo_context = await login_linuxdo(browser)
             if not linuxdo_context:
-                logging.warning('LinuxDo login unavailable, will use cached cookies only')
+                msg = 'LinuxDo cookie expired or unavailable, please run gen_cookie.py to refresh'
+                logging.warning(msg)
+                send_notifications(notifiers, '!! LinuxDo Cookie Expired !!', msg)
 
             # Process each account
             for account in accounts:
