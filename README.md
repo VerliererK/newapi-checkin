@@ -35,19 +35,26 @@ playwright install
 
 ### LinuxDo 登入
 
-LinuxDo 帳密一律透過環境變數設定，不寫入設定檔：
+LinuxDo 登入依以下優先順序嘗試：
+
+1. **已儲存的狀態** — `linuxdo_state.json`（透過 Actions cache 保留）
+2. **`LINUXDO_COOKIE`** 環境變數 — 手動提供的 cookie 字串
 
 | 環境變數 | 必填 | 說明 |
 |----------|------|------|
-| `LINUXDO_EMAIL` | 是 | LinuxDo 登入信箱 |
-| `LINUXDO_PASSWORD` | 是 | LinuxDo 登入密碼 |
+| `LINUXDO_COOKIE` | 是 | LinuxDo cookie 字串（例如 `_t=xxx; _forum_session=yyy`） |
 
-本機開發時可在終端設定：
+#### 生成 Cookie
+
+在本機執行以下指令，會開啟瀏覽器讓你手動登入（處理 hCaptcha），登入後自動產生 cookie：
 
 ```bash
-export LINUXDO_EMAIL="user@example.com"
-export LINUXDO_PASSWORD="password123"
+python gen_cookie.py
 ```
+
+完成後會：
+- 儲存 `linuxdo_state.json`（本機直接使用）
+- 印出 `LINUXDO_COOKIE=...`（複製到 GitHub Secrets）
 
 ### 帳號設定
 
@@ -124,8 +131,7 @@ python checkin.py --channel msedge
 
 | 名稱 | 說明 |
 |------|------|
-| `LINUXDO_EMAIL` | LinuxDo 登入信箱 |
-| `LINUXDO_PASSWORD` | LinuxDo 登入密碼 |
+| `LINUXDO_COOKIE` | LinuxDo cookie 字串（例如 `_t=xxx`） |
 
 ### Variables（一般設定，可隨時查看修改）
 
