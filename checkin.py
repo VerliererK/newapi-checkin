@@ -200,6 +200,7 @@ async def main():
     config = load_config()
     parser = argparse.ArgumentParser(description='Checkin')
     parser.add_argument('--channel', type=str, default='chromium', help='Browser channel')
+    parser.add_argument('--no-headless', action='store_true', help='Run browser in non-headless mode')
     args = parser.parse_args()
 
     notifiers = create_notifiers(config.get('notifications', []))
@@ -207,7 +208,7 @@ async def main():
     accounts = config.get('accounts', [])
 
     async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=True, channel=args.channel)
+        browser = await p.chromium.launch(headless=not args.no_headless, channel=args.channel)
         linuxdo_context = None
 
         try:
