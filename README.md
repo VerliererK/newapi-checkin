@@ -1,6 +1,6 @@
 # NewAPI 自動簽到
 
-使用 Playwright 自動執行 NewAPI 服務的每日簽到，透過 LinuxDo OAuth 自動取得 cookies，支援 GitHub Actions 排程執行。
+使用 Playwright 帶入預先取得的 cookies，自動執行 NewAPI 服務的每日簽到。支援 GitHub Actions 排程執行。
 
 ## 安裝
 
@@ -11,13 +11,11 @@ playwright install
 
 ## 設定
 
-設定檔依以下優先順序載入：
+設定依以下優先順序載入：
 1. 環境變數（用於 GitHub Actions）
 2. `config.json` 檔案（用於本機開發）
 
 ### 設定格式
-
-`config.json`（或 `CHECKIN_ACCOUNTS` 環境變數）只包含帳號和通知設定：
 
 ```json
 {
@@ -29,47 +27,51 @@ playwright install
       "endpoint": "/api/user/sign_in"
     }
   ],
-  "notifications": []
+  "notifications": [
+    {
+      "type": "ntfy",
+      "url": "https://ntfy.sh/your-topic"
+    }
+  ]
 }
 ```
 
-### LinuxDo 登入
-
-LinuxDo 登入依以下優先順序嘗試：
-
-1. **已儲存的狀態** — `linuxdo_state.json`（透過 Actions cache 保留）
-2. **`LINUXDO_COOKIE`** 環境變數 — 手動提供的 cookie 字串
-
-| 環境變數 | 必填 | 說明 |
-|----------|------|------|
-| `LINUXDO_COOKIE` | 是 | LinuxDo cookie 字串（例如 `_t=xxx; _forum_session=yyy`） |
-
-#### 生成 Cookie
-
-在本機執行以下指令，會開啟瀏覽器讓你手動登入（處理 hCaptcha），登入後自動產生 cookie：
-
-```bash
-python gen_cookie.py
-```
-
-完成後會：
-- 儲存 `linuxdo_state.json`（本機直接使用）
-- 印出 `LINUXDO_COOKIE=...`（複製到 GitHub Secrets）
-
-### 帳號設定
+### 帳號欄位
 
 | 欄位 | 必填 | 說明 |
 |------|------|------|
 | `name` | 否 | 帳號名稱，用於日誌識別 |
 | `domain` | 是 | API 網址 |
-| `client_id` | 是 | LinuxDo OAuth client ID |
+| `client_id` | 是 | LinuxDo OAuth client ID（供 `gen_cookies.py` 使用） |
 | `endpoint` | 否 | 簽到端點，預設 `/api/user/sign_in` |
+| `disabled` | 否 | 設為 `true` 跳過此帳號 |
 
-`api_user` 和 `cookies` 會透過 OAuth 自動取得，並快取至 `cookies_cache.json`。
+## 使用方式
+
+### 1. 產生 Cookies
+
+在本機執行，會開啟瀏覽器讓你手動登入 LinuxDo（處理 hCaptcha），登入後自動對每個帳號執行 OAuth 取得 cookies：
+
+```bash
+python gen_cookies.py                  # 預設 chromium
+python gen_cookies.py --channel chrome # 用本機 Chrome
+```
+
+完成後會：
+- 儲存 `cookies_cache.json`（本機直接使用）
+- 印出 JSON 字串（貼到 GitHub Variable `COOKIES_CACHE`）
+
+### 2. 執行簽到
+
+```bash
+python checkin.py                        # 預設 headless + chromium
+python checkin.py --no-headless          # 顯示瀏覽器視窗
+python checkin.py --channel chrome       # 指定瀏覽器
+```
 
 ## 通知
 
-目前支援以下通知方式，請在設定檔的 `notifications` 列表中設定：
+簽到成功、已簽到、失敗時都會發送通知。
 
 ### ntfy
 
@@ -80,88 +82,16 @@ python gen_cookie.py
 }
 ```
 
-當簽到成功且餘額增加，或發生錯誤時，會發送通知。
-
-### 擴充通知方式
-
-若要支援新的通知管道（例如 Telegram、Discord），請依照以下步驟：
-
-1.  在 `utils/notify.py` 中建立新的類別，繼承 `Notifier`：
-
-    ```python
-    class MyNotifier(Notifier):
-        def __init__(self, token):
-            self.token = token
-
-        def send(self, title: str, message: str):
-            # Implement sending logic here
-            pass
-    ```
-
-2.  修改 `utils/notify.py` 中的 `create_notifiers` 函式，加入新的類型判斷：
-
-    ```python
-    def create_notifiers(config_list):
-        notifiers = []
-        for cfg in config_list:
-            if cfg.get("type") == "ntfy":
-                notifiers.append(NtfyNotifier(cfg.get("url")))
-            elif cfg.get("type") == "my_notify":
-                notifiers.append(MyNotifier(cfg.get("token")))
-        return notifiers
-    ```
-
-## 執行
-
-```bash
-python checkin.py
-```
-
-指定瀏覽器：
-
-```bash
-python checkin.py --channel msedge
-```
-
 ## GitHub Actions
 
-在 Repository 設定以下 Secrets 和 Variables：
-
-### Secrets（敏感資料）
-
-| 名稱 | 說明 |
-|------|------|
-| `LINUXDO_COOKIE` | LinuxDo cookie 字串（例如 `_t=xxx`） |
-
-### Variables（一般設定，可隨時查看修改）
+在 Repository 設定以下 Variables：
 
 | 名稱 | 必填 | 說明 |
 |------|------|------|
 | `CHECKIN_ACCOUNTS` | 是 | accounts JSON 陣列 |
+| `COOKIES_CACHE` | 是 | `gen_cookies.py` 產出的 cookies JSON |
 | `CHECKIN_NOTIFY` | 否 | notifications JSON 陣列 |
 
-`CHECKIN_ACCOUNTS` 範例：
+Workflow 每 6 小時自動執行一次，也可手動觸發。
 
-```json
-[
-  {
-    "name": "帳號 A",
-    "domain": "https://example.com",
-    "client_id": "linuxdo-oauth-id",
-    "endpoint": "/api/user/sign_in"
-  }
-]
-```
-
-`CHECKIN_NOTIFY` 範例：
-
-```json
-[
-  {
-    "type": "ntfy",
-    "url": "https://ntfy.sh/your-topic"
-  }
-]
-```
-
-Workflow 會自動快取 `linuxdo_state.json` 和 `cookies_cache.json`，在每次執行間保留 LinuxDo 登入狀態及 OAuth cookies。
+Cookies 過期時，需在本機重新執行 `gen_cookies.py` 並更新 `COOKIES_CACHE` Variable。

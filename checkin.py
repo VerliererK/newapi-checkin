@@ -14,13 +14,13 @@ import asyncio
 import logging
 import argparse
 from playwright.async_api import async_playwright
+from utils.notify import create_notifiers, send_notifications
 
 logging.basicConfig(format='%(asctime)s [%(levelname)s] %(message)s', level=logging.INFO)
 
 # ── 常數 ──────────────────────────────────────────────
 
 USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36'
-COOKIES_CACHE_FILE = 'cookies_cache.json'
 QUOTA_DIVISOR = 500000
 
 
@@ -28,16 +28,21 @@ QUOTA_DIVISOR = 500000
 
 
 def load_config():
-    """從環境變數或 config.json 讀取帳號清單。"""
+    """從環境變數或 config.json 讀取設定（帳號 + 通知）。"""
     accounts_env = os.environ.get('CHECKIN_ACCOUNTS')
+    notify_env = os.environ.get('CHECKIN_NOTIFY')
+
     if accounts_env:
         logging.info('從環境變數讀取設定')
-        return json.loads(accounts_env)
+        return {
+            'accounts': json.loads(accounts_env),
+            'notifications': json.loads(notify_env) if notify_env else [],
+        }
 
     if os.path.exists('config.json'):
         logging.info('從 config.json 讀取設定')
         with open('config.json', encoding='utf-8') as f:
-            return json.load(f).get('accounts', [])
+            return json.load(f)
 
     raise RuntimeError('找不到設定，請設 CHECKIN_ACCOUNTS 環境變數或建 config.json')
 
@@ -51,16 +56,10 @@ def load_cookies_cache():
     if env:
         logging.info('從 COOKIES_CACHE 環境變數讀取 cookies 快取')
         return json.loads(env)
-    if os.path.exists(COOKIES_CACHE_FILE):
-        with open(COOKIES_CACHE_FILE, encoding='utf-8') as f:
+    if os.path.exists('cookies_cache.json'):
+        with open('cookies_cache.json', encoding='utf-8') as f:
             return json.load(f)
     return {}
-
-
-def save_cookies_cache(cache):
-    """把 cookies 寫回快取檔。"""
-    with open(COOKIES_CACHE_FILE, 'w', encoding='utf-8') as f:
-        json.dump(cache, f, indent=2)
 
 
 # ── Step 3: 查額度 ────────────────────────────────────
@@ -119,7 +118,7 @@ async def make_page_with_cookies(browser, domain, cookies_dict):
 # ── 主流程 ────────────────────────────────────────────
 
 
-async def process_account(browser, account, cookies_cache):
+async def process_account(browser, account, cookies_cache, notifiers):
     """處理單一帳號：帶快取 cookie → 查額度 → 簽到 → 再查額度。"""
     name = account.get('name', '?')
     domain = account['domain']
@@ -129,7 +128,9 @@ async def process_account(browser, account, cookies_cache):
 
     cached = cookies_cache.get(domain)
     if not cached:
-        logging.error(f'[{name}] 沒有快取 cookie，跳過')
+        msg = f'[{name}] 沒有快取 cookie，跳過'
+        logging.error(msg)
+        send_notifications(notifiers, 'Checkin 失敗', msg)
         return
 
     api_user = cached['api_user']
@@ -139,7 +140,17 @@ async def process_account(browser, account, cookies_cache):
         await do_checkin(page, domain, api_user, endpoint)
         new = await get_quota(page, domain, api_user)
         if new > old:
-            logging.info(f'[{name}] 簽到成功! 額度 {old} → {new}')
+            msg = f'[{name}] 簽到成功! 額度 {old} → {new}'
+            logging.info(msg)
+            send_notifications(notifiers, 'Checkin 成功', msg)
+        else:
+            msg = f'[{name}] 今日已簽到，額度 ${new}'
+            logging.info(msg)
+    except Exception as e:
+        msg = f'[{name}] 簽到出錯: {e}'
+        logging.error(msg)
+        send_notifications(notifiers, 'Checkin 失敗', msg)
+        raise
     finally:
         await ctx.close()
 
@@ -155,7 +166,9 @@ async def main():
     args = parse_args()
 
     # 1. 讀設定
-    accounts = load_config()
+    config = load_config()
+    accounts = config.get('accounts', [])
+    notifiers = create_notifiers(config.get('notifications', []))
     cookies_cache = load_cookies_cache()
 
     async with async_playwright() as p:
@@ -167,12 +180,10 @@ async def main():
             if account.get('disabled'):
                 continue
             try:
-                await process_account(browser, account, cookies_cache)
+                await process_account(browser, account, cookies_cache, notifiers)
             except Exception as e:
                 logging.error(f'[{account.get("name", "?")}] 出錯: {e}')
 
-        # 4. 收尾
-        save_cookies_cache(cookies_cache)
         await browser.close()
 
     logging.info('全部完成!')

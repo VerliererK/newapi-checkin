@@ -39,18 +39,9 @@ jobs:
         if: steps.playwright-cache.outputs.cache-hit == 'true'
         run: playwright install-deps chromium
 
-      - name: Restore state cache
-        uses: actions/cache@v4
-        with:
-          path: |
-            linuxdo_state.json
-            cookies_cache.json
-          key: checkin-state-${{ github.run_id }}
-          restore-keys: checkin-state-
-
       - name: Run checkin
         env:
-          LINUXDO_COOKIE: ${{ secrets.LINUXDO_COOKIE }}
           CHECKIN_ACCOUNTS: ${{ vars.CHECKIN_ACCOUNTS }}
           CHECKIN_NOTIFY: ${{ vars.CHECKIN_NOTIFY }}
+          COOKIES_CACHE: ${{ vars.COOKIES_CACHE }}
         run: python checkin.py
