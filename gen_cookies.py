@@ -23,6 +23,7 @@ logging.basicConfig(format='%(asctime)s [%(levelname)s] %(message)s', level=logg
 USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36'
 LINUXDO_CONNECT_URL = 'https://connect.linux.do/oauth2/authorize'
 COOKIES_CACHE_FILE = 'cookies_cache.json'
+QUOTA_DIVISOR = 500000
 
 
 # ── 讀設定 ────────────────────────────────────────────
@@ -34,6 +35,39 @@ def load_accounts():
         with open('config.json', encoding='utf-8') as f:
             return json.load(f).get('accounts', [])
     raise RuntimeError('找不到 config.json')
+
+
+def load_cookies_cache():
+    """讀現有的 cookies 快取。"""
+    if os.path.exists(COOKIES_CACHE_FILE):
+        with open(COOKIES_CACHE_FILE, encoding='utf-8') as f:
+            return json.load(f)
+    return {}
+
+
+# ── 檢查 cookie 是否有效 ─────────────────────────────
+
+
+async def check_cookie_valid(browser, domain, api_user, cookies_dict):
+    """帶快取 cookie 呼叫 /api/user/self，能拿到資料就是有效。"""
+    bare_domain = domain.replace('https://', '').replace('http://', '')
+    context = await browser.new_context(user_agent=USER_AGENT, ignore_https_errors=True)
+    await context.add_cookies([{'name': k, 'value': v, 'domain': bare_domain, 'path': '/'} for k, v in cookies_dict.items()])
+    page = await context.new_page()
+    await page.add_init_script("Object.defineProperty(navigator, 'webdriver', { get: () => undefined });")
+
+    try:
+        await page.goto(domain)
+        await page.set_extra_http_headers({'new-api-user': api_user})
+        resp = await page.goto(f'{domain}/api/user/self')
+        data = json.loads(await resp.text())
+        quota = round(data['data']['quota'] / QUOTA_DIVISOR, 2)
+        logging.info(f'Cookie 有效，餘額 ${quota}')
+        return True
+    except Exception:
+        return False
+    finally:
+        await context.close()
 
 
 # ── 等待手動登入 ──────────────────────────────────────
@@ -151,33 +185,55 @@ async def main():
 
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=False, channel=args.channel)
-        context = await browser.new_context(
-            user_agent=USER_AGENT,
-            ignore_https_errors=True,
-        )
-        page = await context.new_page()
-        await page.add_init_script("Object.defineProperty(navigator, 'webdriver', { get: () => undefined });")
 
-        # 1. 等使用者登入 LinuxDo
-        await wait_for_login(page)
-        await page.close()
-
-        # 2. 逐個帳號 OAuth
-        cache = {}
+        # 0. 讀現有快取，先檢查哪些需要重新取得
+        cache = load_cookies_cache()
+        need_oauth = []
         for account in active:
             name = account.get('name', '?')
-            try:
-                api_user, cookies_dict = await oauth_authorize(context, account)
-                if api_user:
-                    cache[account['domain']] = {'api_user': api_user, 'cookies': cookies_dict}
-                    logging.info(f'[{name}] OK')
+            domain = account['domain']
+            cached = cache.get(domain)
+            if cached:
+                logging.info(f'[{name}] 檢查現有 cookie...')
+                if await check_cookie_valid(browser, domain, cached['api_user'], cached['cookies']):
+                    logging.info(f'[{name}] Cookie 仍有效，跳過')
+                    continue
                 else:
-                    logging.error(f'[{name}] 失敗')
-            except Exception as e:
-                logging.error(f'[{name}] 出錯: {e}')
+                    logging.info(f'[{name}] Cookie 已過期，需要重新取得')
+            need_oauth.append(account)
 
-        await context.close()
-        await browser.close()
+        if not need_oauth:
+            logging.info('所有帳號的 cookie 都還有效，不需要登入 LinuxDo')
+            await browser.close()
+        else:
+            logging.info(f'共 {len(need_oauth)} 個帳號需要重新 OAuth')
+
+            context = await browser.new_context(
+                user_agent=USER_AGENT,
+                ignore_https_errors=True,
+            )
+            page = await context.new_page()
+            await page.add_init_script("Object.defineProperty(navigator, 'webdriver', { get: () => undefined });")
+
+            # 1. 等使用者登入 LinuxDo
+            await wait_for_login(page)
+            await page.close()
+
+            # 2. 逐個帳號 OAuth
+            for account in need_oauth:
+                name = account.get('name', '?')
+                try:
+                    api_user, cookies_dict = await oauth_authorize(context, account)
+                    if api_user:
+                        cache[account['domain']] = {'api_user': api_user, 'cookies': cookies_dict}
+                        logging.info(f'[{name}] OK')
+                    else:
+                        logging.error(f'[{name}] 失敗')
+                except Exception as e:
+                    logging.error(f'[{name}] 出錯: {e}')
+
+            await context.close()
+            await browser.close()
 
     # 3. 存檔
     with open(COOKIES_CACHE_FILE, 'w', encoding='utf-8') as f:
