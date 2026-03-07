@@ -1,245 +1,181 @@
+"""
+NewAPI 自動簽到腳本 (簡化版)
+
+整體流程：
+  1. 讀設定 (config.json 或環境變數)
+  2. 讀 cookies 快取
+  3. 開瀏覽器 → 逐個帳號：帶 cookie → 查額度 → 簽到 → 再查額度
+  4. 收工
+"""
+
 import os
 import json
 import asyncio
 import logging
 import argparse
-from utils.exceptions import HTTPError
-from utils.notify import create_notifiers, send_notifications
-from linuxdo import login_linuxdo, oauth_authorize, STATE_FILE
-
 from playwright.async_api import async_playwright
 
 logging.basicConfig(format='%(asctime)s [%(levelname)s] %(message)s', level=logging.INFO)
 
-CONFIG_FILE = 'config.json'
-COOKIES_CACHE = 'cookies_cache.json'
-QUOTA_DIVISOR = 500000
-DEFAULT_ENDPOINT = '/api/user/sign_in'
+# ── 常數 ──────────────────────────────────────────────
+
 USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36'
+COOKIES_CACHE_FILE = 'cookies_cache.json'
+QUOTA_DIVISOR = 500000
+
+
+# ── Step 1: 讀設定 ────────────────────────────────────
 
 
 def load_config():
-    """Load config from environment variables or config.json"""
+    """從環境變數或 config.json 讀取帳號清單。"""
     accounts_env = os.environ.get('CHECKIN_ACCOUNTS')
-    notify_env = os.environ.get('CHECKIN_NOTIFY')
-
     if accounts_env:
-        logging.info('Loading config from environment variables')
-        config = {
-            'accounts': json.loads(accounts_env),
-            'notifications': json.loads(notify_env) if notify_env else [],
-        }
-    elif os.path.exists(CONFIG_FILE):
-        logging.info('Loading config from config.json')
-        with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
-            config = json.load(f)
-    else:
-        raise RuntimeError('No config found. Set CHECKIN_ACCOUNTS env or create config.json')
+        logging.info('從環境變數讀取設定')
+        return json.loads(accounts_env)
 
-    return config
+    if os.path.exists('config.json'):
+        logging.info('從 config.json 讀取設定')
+        with open('config.json', encoding='utf-8') as f:
+            return json.load(f).get('accounts', [])
+
+    raise RuntimeError('找不到設定，請設 CHECKIN_ACCOUNTS 環境變數或建 config.json')
+
+
+# ── Step 2: 讀寫 cookies 快取 ─────────────────────────
 
 
 def load_cookies_cache():
-    """Load cached cookies from file."""
-    if os.path.exists(COOKIES_CACHE):
-        try:
-            with open(COOKIES_CACHE, 'r', encoding='utf-8') as f:
-                return json.load(f)
-        except (json.JSONDecodeError, IOError) as e:
-            logging.warning(f'Failed to load cookies cache: {e}')
+    """從環境變數或快取檔讀取 cookies，環境變數優先。"""
+    env = os.environ.get('COOKIES_CACHE')
+    if env:
+        logging.info('從 COOKIES_CACHE 環境變數讀取 cookies 快取')
+        return json.loads(env)
+    if os.path.exists(COOKIES_CACHE_FILE):
+        with open(COOKIES_CACHE_FILE, encoding='utf-8') as f:
+            return json.load(f)
     return {}
 
 
 def save_cookies_cache(cache):
-    """Save cookies cache to file."""
-    with open(COOKIES_CACHE, 'w', encoding='utf-8') as f:
+    """把 cookies 寫回快取檔。"""
+    with open(COOKIES_CACHE_FILE, 'w', encoding='utf-8') as f:
         json.dump(cache, f, indent=2)
-    logging.info(f'Cookies cache saved to {COOKIES_CACHE}')
 
 
-def update_cookies_cache(cache, domain, api_user, cookies):
-    """Update a single account's cookies in cache."""
-    cache[domain] = {'api_user': api_user, 'cookies': cookies}
+# ── Step 3: 查額度 ────────────────────────────────────
 
 
 async def get_quota(page, domain, api_user):
-    url = f'{domain}/api/user/self'
+    """呼叫 /api/user/self 取得目前餘額。"""
     await page.set_extra_http_headers({'new-api-user': api_user})
-    response = await page.goto(url)
-    await page.wait_for_load_state('networkidle')
-    text = await response.text() if response else ''
-
-    if not response:
-        raise HTTPError('[/api/user/self] No response', status_code=0)
-    if not response.ok:
-        raise HTTPError(f'[/api/user/self] HTTP {response.status}: {text[:100]}', status_code=response.status)
-
-    try:
-        data = json.loads(text)
-    except json.JSONDecodeError as e:
-        raise HTTPError(f'[/api/user/self] Invalid JSON response: {e}', status_code=response.status)
-
-    if not data.get('success'):
-        raise HTTPError(f'[/api/user/self] Failed to get user info: {data}', status_code=response.status)
-
-    user_data = data.get('data', {})
-    quota = round(user_data.get('quota', 0) / QUOTA_DIVISOR, 2)
-    used_quota = round(user_data.get('used_quota', 0) / QUOTA_DIVISOR, 2)
-    logging.info(f'Balance: ${quota}, Used: ${used_quota}')
+    resp = await page.goto(f'{domain}/api/user/self')
+    data = json.loads(await resp.text())
+    quota = round(data['data']['quota'] / QUOTA_DIVISOR, 2)
+    used = round(data['data']['used_quota'] / QUOTA_DIVISOR, 2)
+    logging.info(f'餘額: ${quota}, 已用: ${used}')
     return quota
 
 
-async def do_checkin(page, domain, api_user, endpoint=DEFAULT_ENDPOINT):
+# ── Step 4: 執行簽到 ──────────────────────────────────
+
+
+async def do_checkin(page, domain, api_user, endpoint='/api/user/sign_in'):
+    """對 NewAPI 站發 POST 簽到。"""
     url = f'{domain}{endpoint}'
     await page.set_extra_http_headers({'new-api-user': api_user})
-    response = await page.evaluate(f"fetch('{url}', {{method: 'POST'}}).then(r => r.text())")
-    await page.wait_for_load_state('networkidle')
-    logging.info(f'Checkin result: {response}')
+    result = await page.evaluate(f"fetch('{url}', {{method: 'POST'}}).then(r => r.text())")
+    logging.info(f'簽到結果: {result}')
 
 
-async def _create_fallback_context(browser, domain, cookies_dict):
-    """Create a new browser context with cached cookies for fallback."""
+# ── 工具函數 ──────────────────────────────────────────
+
+
+async def hide_webdriver(page):
+    """讓 Playwright 不被偵測為自動化瀏覽器。"""
+    await page.add_init_script("Object.defineProperty(navigator, 'webdriver', { get: () => undefined });")
+
+
+async def wait_network_idle(page, timeout=10000):
+    """等網路請求都完成，逾時就算了不卡住。"""
+    try:
+        await page.wait_for_load_state('networkidle', timeout=timeout)
+    except Exception:
+        pass
+
+
+async def make_page_with_cookies(browser, domain, cookies_dict):
+    """用已有的 cookies 建一個新 page，直接帶 cookie 進去。"""
     bare_domain = domain.replace('https://', '').replace('http://', '')
-    context = await browser.new_context(
-        user_agent=USER_AGENT,
-        viewport={'width': 800, 'height': 600},
-        ignore_https_errors=True,
-    )
+    context = await browser.new_context(user_agent=USER_AGENT, ignore_https_errors=True)
     await context.add_cookies([{'name': k, 'value': v, 'domain': bare_domain, 'path': '/'} for k, v in cookies_dict.items()])
     page = await context.new_page()
-    await page.add_init_script("Object.defineProperty(navigator, 'webdriver', { get: () => undefined });")
+    await hide_webdriver(page)
+    await page.goto(domain)
+    await wait_network_idle(page)
     return context, page
 
 
-async def process_account(browser, linuxdo_context, account, notifiers, cookies_cache):
-    name = account.get('name', 'Unknown')
-    domain = account.get('domain', '')
-    endpoint = account.get('endpoint', DEFAULT_ENDPOINT)
+# ── 主流程 ────────────────────────────────────────────
 
-    if not domain:
-        logging.warning(f'[{name}] Missing domain, skipping')
+
+async def process_account(browser, account, cookies_cache):
+    """處理單一帳號：帶快取 cookie → 查額度 → 簽到 → 再查額度。"""
+    name = account.get('name', '?')
+    domain = account['domain']
+    endpoint = account.get('endpoint', '/api/user/sign_in')
+
+    logging.info(f'====== [{name}] 開始處理 ======')
+
+    cached = cookies_cache.get(domain)
+    if not cached:
+        logging.error(f'[{name}] 沒有快取 cookie，跳過')
         return
 
+    api_user = cached['api_user']
+    ctx, page = await make_page_with_cookies(browser, domain, cached['cookies'])
     try:
-        # Step 1: Try checkin with cached cookies first
-        cached = cookies_cache.get(domain)
-        if cached:
-            api_user = cached['api_user']
-            cookies_dict = cached['cookies']
-            logging.info(f'[{name}] Using cached cookies (api_user={api_user})')
-
-            fallback_context, page = await _create_fallback_context(browser, domain, cookies_dict)
-            try:
-                await page.goto(domain)
-                await page.wait_for_load_state('networkidle')
-                await _run_checkin(page, name, domain, api_user, endpoint, notifiers)
-                return  # Success, no need for OAuth
-            except Exception as e:
-                logging.warning(f'[{name}] Checkin with cached cookies failed: {e}')
-            finally:
-                await fallback_context.close()
-
-        # Step 2: Cache miss or checkin failed, try OAuth
-        if not linuxdo_context:
-            if cached:
-                logging.error(f'[{name}] Checkin failed and OAuth unavailable, skipping')
-            else:
-                logging.error(f'[{name}] No cached cookies and OAuth unavailable, skipping')
-            return
-
-        logging.info(f'[{name}] Attempting OAuth to get fresh cookies...')
-        page = await linuxdo_context.new_page()
-        await page.add_init_script("Object.defineProperty(navigator, 'webdriver', { get: () => undefined });")
-        try:
-            api_user, cookies_dict = None, None
-            max_retries = 3
-            for attempt in range(1, max_retries + 1):
-                try:
-                    api_user, cookies_dict = await oauth_authorize(linuxdo_context, page, account)
-                    if api_user and cookies_dict:
-                        break
-                    logging.warning(f'[{name}] OAuth returned empty cookies (attempt {attempt}/{max_retries})')
-                except Exception as e:
-                    logging.warning(f'[{name}] OAuth attempt {attempt}/{max_retries} failed: {e}')
-                if attempt < max_retries:
-                    await asyncio.sleep(3)
-
-            if api_user and cookies_dict:
-                update_cookies_cache(cookies_cache, domain, api_user, cookies_dict)
-                logging.info(f'[{name}] OAuth cookies obtained and cached')
-                await _run_checkin(page, name, domain, api_user, endpoint, notifiers)
-            else:
-                logging.error(f'[{name}] OAuth failed after {max_retries} attempts')
-        finally:
-            await page.close()
-
-    except HTTPError as e:
-        err_msg = f'[{name}] HTTP error: {e}'
-        logging.error(err_msg)
-        send_notifications(notifiers, '!! NewAPI Checkin Error !!', err_msg)
-    except Exception as e:
-        err_msg = f'[{name}] Execution error: {e}'
-        logging.error(err_msg)
-        send_notifications(notifiers, '!! NewAPI Checkin Error !!', err_msg)
+        old = await get_quota(page, domain, api_user)
+        await do_checkin(page, domain, api_user, endpoint)
+        new = await get_quota(page, domain, api_user)
+        if new > old:
+            logging.info(f'[{name}] 簽到成功! 額度 {old} → {new}')
+    finally:
+        await ctx.close()
 
 
-async def _run_checkin(page, name, domain, api_user, endpoint, notifiers):
-    """Execute the checkin flow: get_quota -> do_checkin -> get_quota."""
-    logging.info(f'[{name}] Accessing: {domain}')
-    old_quota = await get_quota(page, domain, api_user)
-    await do_checkin(page, domain, api_user, endpoint)
-    new_quota = await get_quota(page, domain, api_user)
-
-    if new_quota > old_quota:
-        msg = f'[{name}] Checkin success, Quota: {old_quota} -> {new_quota}'
-        logging.info(msg)
-        send_notifications(notifiers, '!! NewAPI Checkin Success !!', msg)
+def parse_args():
+    parser = argparse.ArgumentParser(description='NewAPI 自動簽到')
+    parser.add_argument('--channel', type=str, default='chromium', help='瀏覽器 channel (預設: chromium)')
+    parser.add_argument('--no-headless', action='store_true', help='顯示瀏覽器視窗')
+    return parser.parse_args()
 
 
 async def main():
-    config = load_config()
-    parser = argparse.ArgumentParser(description='Checkin')
-    parser.add_argument('--channel', type=str, default='chromium', help='Browser channel')
-    parser.add_argument('--no-headless', action='store_true', help='Run browser in non-headless mode')
-    args = parser.parse_args()
+    args = parse_args()
 
-    notifiers = create_notifiers(config.get('notifications', []))
+    # 1. 讀設定
+    accounts = load_config()
     cookies_cache = load_cookies_cache()
-    accounts = config.get('accounts', [])
 
     async with async_playwright() as p:
+        # 2. 開瀏覽器
         browser = await p.chromium.launch(headless=not args.no_headless, channel=args.channel)
-        linuxdo_context = None
 
-        try:
-            # Login to LinuxDo (tries: saved state → LINUXDO_COOKIE)
-            linuxdo_context = await login_linuxdo(browser)
-            if not linuxdo_context:
-                msg = 'LinuxDo cookie expired or unavailable, please run gen_cookie.py to refresh'
-                logging.warning(msg)
-                send_notifications(notifiers, '!! LinuxDo Cookie Expired !!', msg)
+        # 3. 逐個帳號簽到
+        for account in accounts:
+            if account.get('disabled'):
+                continue
+            try:
+                await process_account(browser, account, cookies_cache)
+            except Exception as e:
+                logging.error(f'[{account.get("name", "?")}] 出錯: {e}')
 
-            # Process each account
-            for account in accounts:
-                await process_account(browser, linuxdo_context, account, notifiers, cookies_cache)
+        # 4. 收尾
+        save_cookies_cache(cookies_cache)
+        await browser.close()
 
-            # Save cookies cache
-            save_cookies_cache(cookies_cache)
-
-            # Save linuxdo state if context exists
-            if linuxdo_context:
-                try:
-                    await linuxdo_context.storage_state(path=STATE_FILE)
-                    logging.info(f'LinuxDo state saved to {STATE_FILE}')
-                except Exception as e:
-                    logging.warning(f'Failed to save LinuxDo state: {e}')
-
-        except Exception as e:
-            logging.error(f'Execution error: {e}')
-        finally:
-            if linuxdo_context:
-                await linuxdo_context.close()
-            await browser.close()
+    logging.info('全部完成!')
 
 
 if __name__ == '__main__':
