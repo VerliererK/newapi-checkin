@@ -4,9 +4,11 @@
 
 ## 安裝
 
+使用 [uv](https://docs.astral.sh/uv/) 管理環境與相依套件，需要 Python 3.10 以上（uv 會自動挑選合適的版本）：
+
 ```bash
-pip install playwright requests
-playwright install
+uv sync
+uv run playwright install chromium
 ```
 
 ## 設定
@@ -53,8 +55,8 @@ playwright install
 在本機執行，會開啟瀏覽器讓你手動登入 LinuxDo（處理 hCaptcha），登入後自動對每個帳號執行 OAuth 取得 cookies：
 
 ```bash
-python gen_cookies.py                  # 預設 chromium
-python gen_cookies.py --channel chrome # 用本機 Chrome
+uv run gen_cookies.py                  # 預設 chromium
+uv run gen_cookies.py --channel chrome # 用本機 Chrome
 ```
 
 完成後會：
@@ -64,9 +66,9 @@ python gen_cookies.py --channel chrome # 用本機 Chrome
 ### 2. 執行簽到
 
 ```bash
-python checkin.py                        # 預設 headless + chromium
-python checkin.py --no-headless          # 顯示瀏覽器視窗
-python checkin.py --channel chrome       # 指定瀏覽器
+uv run checkin.py                        # 預設 headless + chromium
+uv run checkin.py --no-headless          # 顯示瀏覽器視窗
+uv run checkin.py --channel chrome       # 指定瀏覽器
 ```
 
 ## 通知
